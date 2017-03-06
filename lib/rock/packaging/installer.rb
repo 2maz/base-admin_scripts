@@ -95,6 +95,9 @@ module Autoproj
                 image_update(distribution, architecture)
                 image_prepare_hookdir(distribution, architecture, release_prefix)
 
+                CHROOT_EXTRA_DEBS.each do |extra_pkg|
+                    image_install_pkg(distribution, architecture, extra_pkg)
+                end
                 # If gem2deb_base_dir is given, then it will be tried to update
                 # (install a patched version of) gem2deb in the target chroot
                 # (if possible)
@@ -102,9 +105,6 @@ module Autoproj
                 if options[:patch_dir]
                     gem2deb_base_dir = File.join(options[:patch_dir],"gem2deb")
                     image_update_gem2deb(distribution, architecture, gem2deb_base_dir)
-                end
-                CHROOT_EXTRA_DEBS.each do |extra_pkg|
-                    image_install_pkg(distribution, architecture, extra_pkg)
                 end
             end
 
@@ -179,12 +179,17 @@ module Autoproj
                         "Debian package directory: #{gem2deb_debs_dir} does not exist"
                 end
 
-                debfile = Dir.glob(File.join(gem2deb_debs_dir,"*.deb"))
-                if debfile.empty?
+                gem2deb_debfile = Dir.glob(File.join(gem2deb_debs_dir,"gem2deb_*.deb"))
+                if gem2deb_debfile.empty?
                     raise ArgumentError, "#{self} -- Cannot update gem2deb in chroot #{basepath}. " \
                         "Debian package directory: #{gem2deb_debs_dir} does not contain a deb file"
                 else
-                    debfile = File.basename(debfile.first)
+                    gem2deb_debfile = File.basename(gem2deb_debfile.first)
+                end
+
+                gem2deb_test_runner_debfile = Dir.glob(File.join(gem2deb_debs_dir,"gem2deb-test-runner_*.deb"))
+                if !gem2deb_test_runner_debfile.empty?
+                    gem2deb_test_runner_debfile = File.basename(gem2deb_test_runner_debfile.first)
                 end
 
                 mountbase = "mnt"
@@ -194,11 +199,16 @@ module Autoproj
                     raise RuntimeError, "#{self} -- Execution: #{cmd} failed"
                 end
 
-                chroot_cmd(basepath,"dpkg -i /#{mountbase}/#{debfile}")
-
-                cmd = "sudo umount #{mountdir}"
-                if !system(cmd)
-                    raise RuntimeError, "#{self} -- Execution: #{cmd} failed"
+                begin
+                    if !gem2deb_test_runner_debfile.empty?
+                        chroot_cmd(basepath,"dpkg -i /#{mountbase}/#{gem2deb_test_runner_debfile}")
+                    end
+                    chroot_cmd(basepath,"dpkg -i /#{mountbase}/#{gem2deb_debfile}")
+                ensure
+                    cmd = "sudo umount #{mountdir}"
+                    if !system(cmd)
+                        raise RuntimeError, "#{self} -- Execution: #{cmd} failed"
+                    end
                 end
             end
 
