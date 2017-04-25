@@ -3,6 +3,7 @@ require 'tmpdir'
 require 'utilrb'
 require 'timeout'
 require 'time'
+require 'rexml/document'
 require_relative 'debiancontrol'
 
 module Autoproj
@@ -188,7 +189,7 @@ module Autoproj
             end
 
             def git_version(pkg)
-                time_of_last_commit=pkg.importer.run_git_bare(pkg, 'log', '--encoding=UTF-8','--date=iso',"--pretty=format:'%ad'","-1").first
+                time_of_last_commit=pkg.importer.run_git_bare(pkg, 'log', "--pretty=format:'%cI'","-1").first
                 Time.parse(time_of_last_commit.strip)
             end
 
@@ -199,11 +200,11 @@ module Autoproj
                 #   "some comment",
                 #    "------------------------------------------------------------------------"]
                 #
-                #
-                svn_log_string = pkg.importer.run_svn(pkg, 'log', "-l 1")[1]
-                r = Regexp.new(/\|.*\|(.*)\(/)
-                time_of_last_commit = r.match(svn_log_string)[1]
-                Time.parse(time_of_last_commit.strip)
+                svn_log = pkg.importer.run_svn(pkg, 'log', "-l 1", "--xml")
+                svn_log = REXML::Document.new(svn_log.join("\n"))
+                svn_log.elements.each('//log/logentry/date') do |d|
+                    time_of_last_commit = Time.parse(d.text)
+                end
             end
 
             def archive_version(pkg)
