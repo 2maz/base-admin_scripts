@@ -1,0 +1,162 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<matrix-project plugin="matrix-project@1.4">
+  <actions/>
+  <description></description>
+  <logRotator class="hudson.tasks.LogRotator">
+    <daysToKeep>7</daysToKeep>
+    <numToKeep>5</numToKeep>
+    <artifactDaysToKeep>7</artifactDaysToKeep>
+    <artifactNumToKeep>-1</artifactNumToKeep>
+  </logRotator>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>release</name>
+          <description></description>
+          <defaultValue>master</defaultValue>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>rock_base_install_dir</name>
+          <description></description>
+          <defaultValue>/opt/rock</defaultValue>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>package_version</name>
+          <description></description>
+          <defaultValue>noversion</defaultValue>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <scm class="hudson.scm.NullSCM"/>
+  <canRoam>true</canRoam>
+  <disabled>false</disabled>
+  <blockBuildWhenDownstreamBuilding>false</blockBuildWhenDownstreamBuilding>
+  <blockBuildWhenUpstreamBuilding>false</blockBuildWhenUpstreamBuilding>
+  <!--<triggers>
+    <jenkins.triggers.ReverseBuildTrigger>
+      <spec></spec>
+      <upstreamProjects><%= options[:dependencies] %></upstreamProjects>
+      <threshold>
+        <name>SUCCESS</name>
+        <ordinal>0</ordinal>
+        <color>BLUE</color>
+        <completeBuild>true</completeBuild>
+      </threshold>
+    </jenkins.triggers.ReverseBuildTrigger>
+  </triggers>-->
+  <triggers/>
+  <concurrentBuild>false</concurrentBuild>
+  <axes>
+      <hudson.matrix.TextAxis>
+          <name>architecture</name>
+          <values>
+              <% options[:architectures].each do |arch| %>
+              <string><%= arch %></string>
+              <% end %>
+          </values>
+      </hudson.matrix.TextAxis>
+      <hudson.matrix.TextAxis>
+          <name>distribution</name>
+          <values>
+              <% options[:distributions].each do |dist| %>
+              <string><%= dist %></string>
+              <% end %>
+          </values>
+      </hudson.matrix.TextAxis>
+  </axes>
+  <combinationFilter>
+      <%= combinations.to_s %>
+  </combinationFilter>
+  <builders>
+    <hudson.tasks.Shell>
+        <command>
+# Generated from <%= __FILE__ %>
+dest_dir=`pwd`
+build_dir=`echo <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}/build/deb-packaging/$distribution-$architecture`
+
+echo "Destination dir for <%= options[:package_name] %> ($architecture): $dest_dir"
+echo "Creating build dir for <%= options[:package_name] %> ($architecture): $build_dir"
+mkdir -p $build_dir
+
+cd <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}
+. <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}/env.sh
+
+status=`deb_package --activation-status --distributions ${distribution} --architectures ${architecture} | tail -1`
+if [ "${status}" = "active" ]; then
+    deb_package --distributions ${distribution} --architectures ${architecture} --patch-dir <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}/deb_patches --dest-dir $dest_dir --build-dir $build_dir --rock-base-install-dir ${rock_base_install_dir} --release-name ${release} --rebuild --package-version ${package_version} --package <%= options[:package_name] %>
+    cd -
+    # Making sure that the artifact land in the workspace directory
+    # all files need to be in the workspace dir when
+    # calling build-and-provide-package -- so copy them there
+    mv $build_dir/<%= options[:dir_name] %>/$distribution-$architecture/* .
+    echo "Step: 'debian source package creation' completed"
+elif [ "${status}" = "inactive" ]; then
+    echo "Configuration: ${distribution} ${architecture} is not a requested configuration"
+    echo "Step: 'debian source package creation' skipped"
+else
+    echo "Unknown activation status: expect inactive or active, but got ${status}"
+fi
+</command>
+        </hudson.tasks.Shell>
+        <hudson.tasks.Shell>
+          <command>
+cd <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}
+. <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}/env.sh
+status=`deb_package --activation-status --distributions ${distribution} --architectures ${architecture} | tail -1`
+cd -
+if [ "${status}" = "active" ]; then
+    export REMOVE_FROM_RELEASE=true
+    export RELEASE_DISTRIBUTION=${distribution}
+    /usr/bin/build-and-provide-package
+
+    cd <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}
+    deb_package --distributions ${distribution} --architectures ${architecture} --release-name ${release} --update-list <%= File.dirname ENV['AUTOPROJ_CURRENT_ROOT'] %>/${release}/osdeps/rock-osdeps.osdeps-${release}-${architecture} <%= options[:package_name] %>
+    echo "Step: 'build debian package' completed"
+elif [ "${status}" = "inactive" ]; then
+    echo "Configuration: ${distribution} ${architecture} is not a requested configuration"
+    echo "Step: 'build debian package' skipped"
+else
+    echo "Unknown activation status: expect inactive or active, but got ${status}"
+fi
+      </command>
+    </hudson.tasks.Shell>
+  </builders>
+  <publishers>
+    <hudson.tasks.ArtifactArchiver>
+      <artifacts>*.gz,*.bz2,*.xz,*.deb,*.dsc,*.changes</artifacts>
+      <allowEmptyArchive>true</allowEmptyArchive>
+      <onlyIfSuccessful>false</onlyIfSuccessful>
+      <fingerprint>false</fingerprint>
+      <defaultExcludes>true</defaultExcludes>
+      <caseSensitive>true</caseSensitive>
+    </hudson.tasks.ArtifactArchiver>
+  </publishers>
+  <buildWrappers>
+    <hudson.plugins.ws__cleanup.PreBuildCleanup>
+      <deleteDirs>false</deleteDirs>
+      <cleanupParameter></cleanupParameter>
+      <externalDelete></externalDelete>
+    </hudson.plugins.ws__cleanup.PreBuildCleanup>
+    <hudson.plugins.build__timeout.BuildTimeoutWrapper>
+      <strategy class="hudson.plugins.build_timeout.impl.AbsoluteTimeOutStrategy">
+        <timeoutMinutes>600</timeoutMinutes>
+      </strategy>
+      <operationList>
+        <hudson.plugins.build__timeout.operations.FailOperation/>
+      </operationList>
+    </hudson.plugins.build__timeout.BuildTimeoutWrapper>
+  </buildWrappers>
+  <executionStrategy class="hudson.matrix.DefaultMatrixExecutionStrategyImpl">
+    <runSequentially>false</runSequentially>
+    <touchStoneCombinationFilter></touchStoneCombinationFilter>
+    <touchStoneResultCondition>
+      <name>SUCCESS</name>
+      <ordinal>0</ordinal>
+      <color>BLUE</color>
+      <completeBuild>true</completeBuild>
+    </touchStoneResultCondition>
+  </executionStrategy>
+</matrix-project>

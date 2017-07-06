@@ -1,54 +1,49 @@
 #!/usr/bin/make -f
 
-rock_install_dir = /opt/rock
-rock_bindir = /tmp/rock/bin
+# BEGIN ENVIRONMENT SETUP
+# https://www.debian.org/doc/debian-policy/ch-source.html
+# nocheck: This tag says to not run any build-time test suite provided by the package.
+export DEB_BUILD_OPTIONS=nocheck
 
-ruby_ver = 1.9.1
-arch_name = $(subst linux-gnu,linux-,$(patsubst %linux-gnu,%linux,$(DEB_BUILD_GNU_TYPE)))
-ruby_binary = /usr/bin/ruby$(ruby_ver)
-ruby_libdir = /usr/lib/ruby
-rockruby_libdir = $(rock_install_dir)/lib/ruby/$(ruby_ver)
-rockruby_archdir = $(rock_install_dir)/lib/ruby/$(ruby_ver)/$(arch_name)
-
-# Update execution path for orogen, so that it picks up ruby-facets (since we don't put much effort into standardizing facets it installs in
-# vendor_ruby/standard and vendory_ruby/core) -- from Ubuntu 13.04 ruby-facets will be properly packaged
-rockruby_extra_libdir = /usr/lib/ruby/vendor_ruby/standard/:/usr/lib/ruby/vendor_ruby/core/
-
-# Setting up the env variables
-env_setup = PATH=$(rock_bindir):$(PATH)
-env_setup += RUBYLIB=$(rockruby_libdir):$(rockruby_archdir):$(rockruby_extra_libdir):$(RUBYLIB)
-env_setup += Rock_DIR=$(rock_install_dir)/share/rock/cmake CMAKE_PREFIX_PATH=$(rock_install_dir)
-env_setup += PKG_CONFIG_PATH=$(rock_install_dir)/lib/pkgconfig:$(PKG_CONFIG_PATH)
-env_setup += LD_LIBRARY_PATH=$(rock_install_dir)/lib:$(LD_LIBRARY_PATH)
-env_setup += OROGEN_PLUGIN_PATH=$(rock_install_dir)/share/orogen/plugins
+# Setup of $(arch), $(rockruby_libdir) and $(rockruby_archdir)
+<%= ruby_arch_setup %>
+# Setup of paths: PATH,PKG_CONFIG_PATH,RUBYLIB,...
+<%= env_setup %>
 
 DEB_VERBOSE_ALL=1
 include /usr/share/cdbs/1/rules/debhelper.mk
-DEB_DH_SHLIBDEPS_ARGS_ALL=-l$(rock_install_dir)/lib
+extra_lib_dir=$(shell pwd)/debian/<%= debian_name %>$(rock_install_dir)/lib
+# This argument list is forwarded to dh_shlibdeps which takes the -l option and a colon separated list of libraries
+# (not that this is different from the linker arguments)
+DEB_DH_SHLIBDEPS_ARGS_ALL=-l$(extra_lib_dir):$(extra_lib_dir)/$(arch):$(rock_install_dir)/lib:$(rock_install_dir)/lib/$(arch)
+
+rock_doc_install_dir=$(rock_install_dir)/share/doc/<%= debian_name %>
 
 pre-build::
-	# Debug information:
-	echo "System ruby libraries: "
-	if [ -d $(ruby_libdir) ]; then find $(ruby_libdir); fi
+	echo "Detected:"
+	echo "   ruby version: $(ruby_ver)"
+	echo "   ruby libdir: $(rockruby_libdir)"
+	echo "   ruby archdir: $(rockruby_archdir)"
 
-	echo "Installed into $(rock_install_dir):"
-	if [ -d $(rock_install_dir) ]; then find $(rock_install_dir); fi
+	#echo "Current directory:"
+	#find .
 
-	echo "Current directory:"
-	find .
-	
-	# Set the ruby version -- workaround, until we use base/types to trigger to update-alternatives and set /opt/rock/bin/ruby
-	if [ ! -d $(rock_bindir) ]; then mkdir -p $(rock_bindir); fi
-	if [ ! -e $(rock_bindir)/ruby ]; then ln -s $(ruby_binary) $(rock_bindir)/ruby; fi
+# END ENVIRONMENT SETUP
+######################################
+# BEGIN OROGEN -- This block needs to be executed before CMAKE
 
-# Making sure orogen is executed before cmake is called
 <% if package.class == Autobuild::Orogen %>
+	# Making sure orogen is executed before cmake is called
 	echo "pre-build: calling orogen in order to generate CMake layout"
-	$(env_setup) orogen <%= Autobuild::Orogen.orogen_options.join(" ") %> <%= pkg.orogen_options.join(" ") %> --corba --transports=corba,mqueue,typelib --type-export-policy=used <%= package.orogen_file %>
-	echo "Current directory including oroGen generated files"
-	find . 
+	$(env_setup) orogen <%= Autobuild::Orogen.orogen_options.join(" ") %> <%= package.orogen_options.join(" ") %> --corba --transports=corba,mqueue,typelib --type-export-policy=used <%= package.orogen_file %>
+	#echo "Current directory including oroGen generated files"
+	#find . 
 <% end %>
 
+# END OROGEN
+######################################
+# BEGIN CMAKE
+#
 <% if package.class == Autobuild::CMake || package.class == Autobuild::Orogen %>
 # Defining the cmake command and setting the required enviroment variables
 # PKG_CONFIG_PATH Resolve Rock package via pkg-config
@@ -57,24 +52,92 @@ pre-build::
 CMAKE = $(env_setup) cmake
 DEB_CMAKE_INSTALL_PREFIX = $(rock_install_dir)
 
-# Debian packaging discourages the use of rpath, and 
-# cdbs actively disables it setting CMAKE_SKIP_RPATH=ON
-# however since we install into /opt/rock we turn skipping off again
-# CXXFLAGS+=-Wl,-rpath-link,/opt/rock/lib
+# Debian packaging discourages the use of rpath, but
+# cdbs actively sets CMAKE_SKIP_RPATH=ON, so reinforcing OFF here
 DEB_CMAKE_EXTRA_FLAGS = -DCMAKE_SKIP_RPATH=OFF
 # Telling FindGEM.cmake to search for os packages using pkg-config and not for gems
 DEB_CMAKE_EXTRA_FLAGS += -DGEM_OS_PKG=TRUE
 # Leaving RUBY_EXECUTABLE unset since it maps to a path of the user executing the upload script
-DEB_CMAKE_EXTRA_FLAGS += <%= package.defines.map { |k, v| "-D#{k}=#{v}" unless "#{k}" == "RUBY_EXECUTABLE" }.join(" ") %>
+DEB_CMAKE_EXTRA_FLAGS += <%= package.defines.map { |k, v| "-D#{k}=\"#{v}\"" unless "#{k}" == "RUBY_EXECUTABLE" || "#{k}" == "ROCK_TEST_ENABLED" || "#{k}" == "ROCK_TEST_LOG_DIR" }.join(" ") %>
+# Disable ROCK Testing -- since running test on the OBS would require proper setting of path, etc. (see. data_processing/type_to_vector)
+DEB_CMAKE_EXTRA_FLAGS += -DROCK_TEST_ENABLED=OFF -UROCK_TEST_LOG_DIR
 include /usr/share/cdbs/1/class/cmake.mk
 
+# END CMAKE
+##########################################
+# BEGIN AUTOTOOLS
+#
 <% elsif package.class == Autobuild::Autotools %>
-DEB_CONFIGURE_PREFIX= /opt/rock
-DEB_MAKE_EXTRA_FLAGS = <%= package.configureflags.join(" ") %>
-    <% if package.using[:libtool] %>
-DEB_AUTO_UPDATE_LIBTOOL = pre # post / pre
-    <% end %>
+DEB_CONFIGURE_PREFIX= $(rock_install_dir)
+DEB_CONFIGURE_EXTRA_FLAGS = <%= extra_configure_flags(package).join(" ") %>
+
+# use autoreconf: check with external/libply
+# use autogen: check with drivers/araviz
+<% if package.using[:autogen].nil? %>
+<%     package.using[:autogen] = %w{autogen autogen.sh}.find { |f| File.exist?(File.join(package.srcdir, f)) } %>
+<% end %>
+<% if package.using[:autogen] %>
+DEB_DH_AUTORECONF_ARGS += <%= File.join(".",package.using[:autogen]) %>
+<% end %>
 include /usr/share/cdbs/1/class/autotools.mk
+include /usr/share/cdbs/1/rules/autoreconf.mk
+
+# END AUTOTOOLS
+############################################
+# BEGIN IMPORTER
+#
+<% elsif package.importer.kind_of?(Autobuild::ArchiveImporter) || package.kind_of?(Autobuild::ImporterPackage) %>
+CMAKE = $(env_setup) cmake
+DEB_CMAKE_INSTALL_PREFIX = $(rock_install_dir)
+DEB_CMAKE_EXTRA_FLAGS = -DCMAKE_SKIP_RPATH=OFF
+DEB_CMAKE_EXTRA_FLAGS += -DGEM_OS_PKG=TRUE
+# Leaving RUBY_EXECUTABLE unset since it maps to a path of the user executing the upload script
+include /usr/share/cdbs/1/class/cmake.mk
+
+# END IMPORTER
+# ##########################################
+#
 <% else 
 raise "debian/rules: cannot handle package type #{package.class} for #{package.name}"
 end %>
+
+# http://cdbs-doc.duckcorp.org/en/cdbs-doc.xhtml see post-configure actions
+# replace all entries of -I with -I and -isystem in order to 
+#   (a) guarantee that pkgconfig can still knowns the include directory (-I)
+#   (b) the include directory is actually accounted for as system include directory (-isystem)
+# Account for the fact, that configure is called multiple times e.g. revert changes first, then reapply
+configure/<%=debian_name(package,true) %>::
+	echo "Adapt -I to -isystem in pkgconfig files:"
+	find . -name '[a-zA-Z]*.pc' -exec sh -c "echo Adapting {}; sed -i 's#-isystem[^ ]\+##g' {}; sed -i 's#-I\([^ ]\+\)#-I\1 -isystem\1#g' {}; sed -i 's#[ ]\+# #g' {}; cat {};" \;
+
+###########################################
+# DOCS
+
+<% if package.class == Autobuild::CMake || package.class == Autobuild::Orogen || package.class == Autobuild::Autotools %>
+
+# Build docs
+# This checks for Doxyfile and runs doxygen with that.
+# Otherwise, it tries the "doc" target.
+# Since docs are not critical, ignore failures('-' on recipe line start).
+# The make call is supposed to be invoked even if -t or -n is selected,
+# with the appropriate flags('+' on recipe line start)
+
+common-build-arch common-build-indep:: debian/stamp-rock-doc
+debian/stamp-rock-doc:
+	-+$(DEB_MAKE_INVOKE) doc
+	touch $@
+
+common-install-arch common-install-indep:: common-install-rock-doc
+common-install-rock-doc::
+	mkdir -p $(DEB_DESTDIR)$(rock_doc_install_dir)
+	$(if $(wildcard $(DEB_SRCDIR)/doc/html),-cp -r "$(DEB_SRCDIR)/doc/html" "$(DEB_DESTDIR)$(rock_doc_install_dir)",$(if $(wildcard $(DEB_SRCDIR)/doc),-cp -r "$(DEB_SRCDIR)/doc" "$(DEB_DESTDIR)$(rock_doc_install_dir)"))
+	$(if $(wildcard $(DEB_BUILDDIR)/doc/html),-cp -r "$(DEB_BUILDDIR)/doc/html" "$(DEB_DESTDIR)$(rock_doc_install_dir)",$(if $(wildcard $(DEB_BUILDDIR)/doc),-cp -r "$(DEB_BUILDDIR)/doc" "$(DEB_DESTDIR)$(rock_doc_install_dir)"))
+
+clean::
+	rm -f debian/stamp-rock-doc
+	rm -rf $(DEB_SRCDIR)/doc/html
+
+<% end %>
+
+# END DOCS
+###########################################
